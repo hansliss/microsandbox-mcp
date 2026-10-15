@@ -19,9 +19,10 @@ export interface ToolError {
 }
 
 type TextContent = { type: "text"; text: string };
+type ImageContent = { type: "image"; data: string; mimeType: string };
 
 export type ToolResult = {
-  content: TextContent[];
+  content: Array<TextContent | ImageContent>;
   isError?: true;
 };
 

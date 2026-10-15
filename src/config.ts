@@ -1,6 +1,8 @@
 import path from "node:path";
 
 export interface ServerConfig {
+  allowedImages: string[] | undefined;
+  defaultImage: string | undefined;
   hostPathPolicy: "allowlist" | "unrestricted";
   hostPaths: string[];
   dangerousEnabled: boolean;
@@ -20,8 +22,17 @@ export function getServerConfig(): ServerConfig {
 
   const hostPathPolicy = parseHostPathPolicy(process.env.MICROSANDBOX_MCP_HOST_PATH_POLICY);
   const hostPaths = parseHostPaths(process.env.MICROSANDBOX_MCP_HOST_PATHS);
+  const allowedImages = process.env.MICROSANDBOX_MCP_ALLOWED_IMAGES === undefined
+    ? undefined
+    : [...new Set(process.env.MICROSANDBOX_MCP_ALLOWED_IMAGES.split(",").map((entry) => entry.trim()).filter(Boolean))];
+  const defaultImage = process.env.MICROSANDBOX_MCP_DEFAULT_IMAGE?.trim() || undefined;
+  if (defaultImage && allowedImages && !allowedImages.includes(defaultImage)) {
+    throw new Error("MICROSANDBOX_MCP_DEFAULT_IMAGE must be in MICROSANDBOX_MCP_ALLOWED_IMAGES");
+  }
 
   cachedConfig = {
+    allowedImages,
+    defaultImage,
     hostPathPolicy,
     hostPaths,
     dangerousEnabled: process.env.MICROSANDBOX_MCP_ENABLE_DANGEROUS === "1",

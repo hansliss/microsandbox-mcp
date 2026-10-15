@@ -127,6 +127,8 @@ function policyData(): Record<string, unknown> {
   return {
     hostPathPolicy: config.hostPathPolicy,
     hostPaths: config.hostPaths,
+    allowedImages: config.allowedImages ?? null,
+    defaultImage: config.defaultImage ?? null,
     dangerousEnabled: config.dangerousEnabled,
     maxOutputBytes: config.maxOutputBytes,
     defaultTimeoutMs: config.defaultTimeoutMs,

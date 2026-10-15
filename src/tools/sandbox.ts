@@ -7,7 +7,8 @@ import { Sandbox, Snapshot, type SandboxHandle } from "microsandbox";
 
 import { formatError } from "../utils/errors.js";
 import { formatExecOutput } from "../utils/exec-output.js";
-import { assertHostPathAllowed } from "../utils/policy.js";
+import { getServerConfig } from "../config.js";
+import { assertHostPathAllowed, assertImageAllowed, ImagePolicyError } from "../utils/policy.js";
 import { ok } from "../utils/response.js";
 import { sandboxHandleData, sandboxSummaryData } from "../utils/serialization.js";
 
@@ -77,7 +78,7 @@ const rootfsSchema = z.discriminatedUnion("kind", [
 
 export const sandboxCreateSchema = z.object({
   name: z.string().optional(),
-  image: z.string().optional().describe("Convenience OCI image or local rootfs path"),
+  image: z.string().min(1).optional().describe("OCI image or local rootfs path; uses the server default when image and rootfs are omitted. Server image policy applies."),
   rootfs: rootfsSchema.optional(),
   cpus: z.number().int().min(1).max(16).optional(),
   memoryMib: z.number().int().min(128).optional(),
@@ -687,10 +688,15 @@ function buildSandbox(name: string, args: z.infer<typeof createSchema>, persiste
 }
 
 function applyRootfs(builder: ReturnType<typeof Sandbox.builder>, args: z.infer<typeof createSchema>) {
+  const config = getServerConfig();
   const rootfs = args.rootfs;
   if (rootfs) {
+    if (config.allowedImages !== undefined && rootfs.kind !== "oci") {
+      throw new ImagePolicyError("local rootfs is disabled when MICROSANDBOX_MCP_ALLOWED_IMAGES is configured");
+    }
     switch (rootfs.kind) {
       case "oci":
+        assertImageAllowed(rootfs.reference);
         builder = builder.imageWith((image) => {
           let acc = image.oci(rootfs.reference);
           if (rootfs.upperSizeMib) acc = acc.upperSize(rootfs.upperSizeMib);
@@ -719,7 +725,14 @@ function applyRootfs(builder: ReturnType<typeof Sandbox.builder>, args: z.infer<
     }
   }
 
-  if (!args.image) throw new Error("sandbox_create requires rootfs or image");
+  const reference = args.image ?? config.defaultImage;
+  if (!reference) throw new Error("sandbox_create/sandbox_run requires rootfs or image, or MICROSANDBOX_MCP_DEFAULT_IMAGE");
+  assertImageAllowed(reference);
+  // Force OCI interpretation for policy-controlled references, even if a local
+  // directory happens to have the same name as an allowed image.
+  if (config.allowedImages !== undefined || args.image === undefined) {
+    return builder.imageWith((image) => image.oci(reference));
+  }
   return builder.image(resolvePathOrName(args.image));
 }
 

@@ -2,15 +2,61 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { Sandbox } from "microsandbox";
 
+import { getServerConfig } from "../config.js";
 import { formatError } from "../utils/errors.js";
+import { imageMimeType } from "../utils/image-content.js";
 import { limitText, type Truncation } from "../utils/output.js";
 import { assertHostPathAllowed } from "../utils/policy.js";
-import { ok } from "../utils/response.js";
+import { fail, ok, type ToolResult } from "../utils/response.js";
 import { fsEntryData, fsMetadataData } from "../utils/serialization.js";
 
 const encodingSchema = z.enum(["utf8", "base64"]);
 
 export function registerFilesystemTools(server: McpServer): void {
+  server.registerTool(
+    "sandbox_fs_read_image",
+    {
+      title: "Display Image from Sandbox",
+      description: "Return a sandbox PNG, JPEG, GIF, or WebP file as MCP image content for viewing in chat. Generate the image in a persistent sandbox first; sandbox_run deletes its sandbox. Oversized images are rejected, never truncated.",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the running sandbox containing the image"),
+        path: z.string().startsWith("/").describe("Absolute image file path inside the sandbox"),
+        maxBytes: z.number().int().positive().optional().describe("Optional smaller raw-file byte limit; the server output cap also applies to the base64 payload"),
+      }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ name, path, maxBytes }): Promise<ToolResult> => {
+      try {
+        // Four base64 bytes encode three input bytes. Clients can lower this
+        // limit but cannot increase the configured server output cap.
+        const limit = Math.min(maxBytes ?? Infinity, Math.floor(getServerConfig().maxOutputBytes / 4) * 3);
+        const fs = await sandboxFs(name);
+        const meta = await fs.stat(path);
+        if (meta.kind !== "file") return fail("invalid_image", "image path must refer to a regular file");
+        if (meta.size > limit) return imageTooLarge(limit);
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const stream = await fs.readStream(path);
+        try {
+          for await (const chunk of stream) {
+            size += chunk.byteLength;
+            // Recheck while reading: the guest can modify the file after stat.
+            if (size > limit) return imageTooLarge(limit);
+            chunks.push(Buffer.from(chunk));
+          }
+        } finally {
+          await stream[Symbol.asyncDispose]();
+        }
+        const data = Buffer.concat(chunks, size);
+        const mimeType = imageMimeType(data);
+        if (!mimeType) return fail("unsupported_image_format", "expected a PNG, JPEG, GIF, or WebP file (detected from its header)");
+        return { content: [{ type: "image", data: data.toString("base64"), mimeType }] };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
   server.registerTool(
     "sandbox_fs_read",
     {
@@ -339,6 +385,10 @@ export function registerFilesystemTools(server: McpServer): void {
       }
     },
   );
+}
+
+function imageTooLarge(limit: number): ToolResult {
+  return fail("image_too_large", `image exceeds the ${limit}-byte limit; resize or compress it before reading`);
 }
 
 async function sandboxFs(name: string) {

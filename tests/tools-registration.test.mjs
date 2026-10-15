@@ -62,6 +62,7 @@ test("registers the full tool catalog", () => {
     "sandbox_exec_close",
     "sandbox_logs_read",
     "sandbox_logs_stream",
+    "sandbox_fs_read_image",
     "sandbox_fs_read",
     "sandbox_fs_write",
     "sandbox_fs_list",

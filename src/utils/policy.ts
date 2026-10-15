@@ -12,6 +12,18 @@ export class PolicyError extends Error {
   }
 }
 
+export class ImagePolicyError extends Error {
+  readonly code = "image_denied";
+}
+
+export function assertImageAllowed(reference: string): string {
+  const allowed = getServerConfig().allowedImages;
+  if (allowed !== undefined && !allowed.includes(reference)) {
+    throw new ImagePolicyError(`image ${JSON.stringify(reference)} is outside MICROSANDBOX_MCP_ALLOWED_IMAGES`);
+  }
+  return reference;
+}
+
 export function assertHostPathAllowed(rawPath: string): string {
   const config = getServerConfig();
   const resolved = resolveExistingAware(rawPath);

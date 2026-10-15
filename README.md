@@ -8,6 +8,35 @@ Give your AI agents sandboxes. This MCP server connects any AI agent to [microsa
 
 Run the server with `npx -y microsandbox-mcp` using stdio transport.
 
+For clients that connect to a URL, start the Streamable HTTP transport explicitly:
+
+```bash
+npx -y microsandbox-mcp --transport http --port 3000
+```
+
+The MCP endpoint is `http://127.0.0.1:3000/mcp`. HTTP mode binds to `127.0.0.1` by
+default and keeps sessions in memory. Use `--host`, `--port`, and `--path` to
+change the listener, or set `MICROSANDBOX_MCP_HTTP_HOST`,
+`MICROSANDBOX_MCP_HTTP_PORT`, and `MICROSANDBOX_MCP_HTTP_PATH`.
+
+The transport can also be selected with `MICROSANDBOX_MCP_TRANSPORT=http`.
+Stdio remains the default, so existing stdio client configurations continue to
+work unchanged. Only expose HTTP mode beyond localhost when it is protected by
+an appropriate network boundary or authentication proxy.
+
+To trace MCP messages, set `MICROSANDBOX_MCP_TRACE=1`. Diagnostics are written
+to stderr, so stdio protocol traffic remains valid:
+
+```bash
+MICROSANDBOX_MCP_TRACE=1 npx -y microsandbox-mcp --transport http --port 3000
+```
+
+Trace output includes incoming and outgoing JSON-RPC messages, including tool
+arguments and results. It may contain secrets or sandbox file contents; use it
+only for debugging and remove it afterward. Set
+`MICROSANDBOX_MCP_TRACE_MAX_BYTES` to change the per-message limit (default:
+32 KiB).
+
 <details>
 <summary><b>Claude Code</b></summary>
 
@@ -186,6 +215,7 @@ Use `snapshotBase` for a dependent archive. Host resources are not inherited: su
 | Tool | Description |
 | ---- | ----------- |
 | `sandbox_fs_read` | Read a sandbox file as UTF-8 text or base64 bytes |
+| `sandbox_fs_read_image` | Return a sandbox PNG, JPEG, GIF, or WebP file as native MCP image content for display in chat |
 | `sandbox_fs_write` | Write UTF-8 text or base64 bytes to a sandbox file |
 | `sandbox_fs_list` | List sandbox directory entries |
 | `sandbox_fs_mkdir` | Create a sandbox directory |
@@ -196,6 +226,38 @@ Use `snapshotBase` for a dependent archive. Host resources are not inherited: su
 | `sandbox_fs_exists` | Check whether a sandbox path exists |
 | `sandbox_fs_copy_from_host` | Copy an allowlisted host path into a sandbox |
 | `sandbox_fs_copy_to_host` | Copy a sandbox path to an allowlisted host destination |
+
+To display a generated graph, use `sandbox_create`, then `sandbox_shell` or
+`sandbox_exec` to run Python and save the plot (for example,
+`plt.savefig('/tmp/graph.png')`). Call:
+
+```json
+{"name":"sandbox_fs_read_image","arguments":{"name":"plot-sandbox","path":"/tmp/graph.png"}}
+```
+
+The tool returns `{ "type": "image", "mimeType": "image/png", "data": "<base64>" }`
+inside the MCP response's `content` array, rather than embedding base64 in JSON
+text. Display and model access depend on the chat client's image support.
+Use an image containing Python and the plotting libraries, or install them in
+the sandbox first. Keep the sandbox until after reading the image;
+`sandbox_run` removes its sandbox before another tool can read its files.
+
+Formats are identified by file headers, independently of the filename; the
+server does not decode or convert images. SVG and other formats are rejected.
+The base64 payload is capped by `MICROSANDBOX_MCP_MAX_OUTPUT_BYTES` (1 MiB by
+default, about 768 KiB of raw image data). Optional `maxBytes` can lower the
+raw-file limit. Oversized files return an error instead of a broken, truncated
+image. This tool reads guest files through the sandbox SDK without copying to
+the host filesystem.
+
+After rebuilding and restarting the server, verify image transport from a
+KVM-enabled host with `node tests/e2e-image.mjs`. The probe uses
+`http://127.0.0.1:3000/mcp` and selects the server's default image, its first
+allowlisted image, or `alpine:3.19` when neither setting is configured. Set
+`MICROSANDBOX_MCP_E2E_URL` for another endpoint or
+`MICROSANDBOX_MCP_E2E_IMAGE` for an explicit allowed image. It creates a temporary
+sandbox, writes a tiny PNG, verifies the returned image block, and cleans up.
+It verifies transport and file access; rendering still needs a chat-client test.
 
 **Metrics**
 
@@ -277,10 +339,32 @@ Use `snapshotBase` for a dependent archive. Host resources are not inherited: su
 | ------- | ------- | ----------- |
 | `MICROSANDBOX_MCP_HOST_PATHS` | current working directory | Colon-separated allowlist for bind mounts, host copy, snapshot save/load, and other host path operations |
 | `MICROSANDBOX_MCP_HOST_PATH_POLICY` | `allowlist` | Set to `unrestricted` to allow any host path |
+| `MICROSANDBOX_MCP_ALLOWED_IMAGES` | unset (any image) | Comma-separated exact OCI image references permitted for `sandbox_create` and `sandbox_run`; an explicitly empty list denies all images. Local bind/disk rootfs inputs are disabled when set |
+| `MICROSANDBOX_MCP_DEFAULT_IMAGE` | unset | OCI image used by `sandbox_create` and `sandbox_run` when both `image` and `rootfs` are omitted; must be in the allowlist when configured |
 | `MICROSANDBOX_MCP_ENABLE_DANGEROUS` | `0` | Enables future dangerous operations; destructive cache operations still require explicit `confirm: true` |
 | `MICROSANDBOX_MCP_MAX_OUTPUT_BYTES` | `1048576` | Default cap for command output, logs, and file reads |
 | `MICROSANDBOX_MCP_DEFAULT_TIMEOUT_MS` | `120000` | Default timeout budget for exec-style operations |
 | `MICROSANDBOX_MCP_SESSION_TTL_MS` | `900000` | Idle TTL for in-memory exec sessions |
+
+For example, restrict new sandboxes to two images and let clients omit the image:
+
+```bash
+MICROSANDBOX_MCP_ALLOWED_IMAGES='alpine:3.19,python:3.12' \
+MICROSANDBOX_MCP_DEFAULT_IMAGE='alpine:3.19' \
+node dist/index.js --transport http --host 127.0.0.1 --port 3000
+```
+
+Image references match exactly, with whitespace trimmed in configuration. There
+are no wildcards or implicit aliases: `alpine`, `alpine:3.19`, and
+`docker.io/library/alpine:3.19` are separate entries. Use digest-pinned references
+for immutable selections; tags can change. Setting only a default does not
+restrict explicit client choices. Restart the server after changing settings.
+The effective values appear in `runtime_check` and `microsandbox://policy`.
+
+This policy governs fresh image selection through create/run, including
+`rootfs.kind: "oci"`. It does not restrict existing sandboxes, snapshot restores,
+mounts, commands, or networking; those have separate controls. It does not verify
+image signatures or prevent code downloads inside an allowed image.
 | `MSB_BACKEND` | unset | Explicit backend selection: `local` or `cloud` |
 | `MSB_PROFILE` | unset | Select a named backend profile from `~/.microsandbox/config.json` |
 | `MSB_API_KEY` | unset | API key used after Cloud is selected; does not select Cloud by itself |

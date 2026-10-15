@@ -34,6 +34,8 @@ export function registerRuntimeTools(server: McpServer): void {
           libkrunfwPath: process.env.MSB_LIBKRUNFW_PATH ?? null,
           hostPathPolicy: config.hostPathPolicy,
           hostPaths: config.hostPaths,
+          allowedImages: config.allowedImages ?? null,
+          defaultImage: config.defaultImage ?? null,
           dangerousEnabled: config.dangerousEnabled,
         });
       } catch (error) {
