@@ -1,5 +1,7 @@
 # microsandbox-mcp
 
+*My additions and other changes were vibed with Codex CLI. They work for me, but I can't take any responsibility for them. Read through the commits if you want to make sure.*
+
 Give your AI agents sandboxes. This MCP server connects any AI agent to [microsandbox](https://github.com/microsandbox/microsandbox) — letting them create fast lightweight sandboxes, execute code, manage files, and monitor resources.
 
 **[Documentation](https://docs.microsandbox.dev)** | **[npm Package](https://www.npmjs.com/package/microsandbox-mcp)** | **[GitHub](https://github.com/microsandbox/microsandbox)**
